@@ -1,0 +1,53 @@
+# Working on this application
+
+A web application on the Crab framework: Arc renders its pages, sessions keep a visit's temporary data, and Tide reads and saves its models. The server is long-running: one process serves many requests, so state that outlives a request is shared by every request after it.
+
+## Start here
+
+- `php cua describe` prints the whole application: every route with what it takes, the middleware, commands, scheduled tasks, listeners, servers, databases and settings. Read it before reading files.
+- `php cua` lists the commands; `php cua <command> --help` explains one.
+- The framework's guide is in `vendor/crabphp/framework/docs/`, one page per topic.
+
+## Where things go
+
+| What | Where |
+| --- | --- |
+| HTTP routes | `routes/web.php`, with `Route::get()` and the rest |
+| Pages | `resources/views/`, Arc templates an action returns with `view('notes', [...])` |
+| Components | `resources/views/components/`: `<NoteCard>` is `note-card.arc.php`, with typed props in `@props(...)` and imports in a `<?php use …; ?>` block at the top |
+| Models | `app/`, a class extending `Crab\Tide\Model` with its columns as typed properties: `app/Note.php` |
+| Commands | `app/Console/`, written with `php cua make:command PruneUsers`, which registers it in `routes/console.php` |
+| Code a route, job, listener or scheduled task runs | a class with `handle()` in `app/Actions/` |
+| Middleware, input classes | `app/Http/`; `php cua make:middleware RequireAdmin` |
+| Services, listeners, scheduled tasks | `register()` of `app/Setup.php` |
+| Event objects | `app/Events/` |
+| Records: a readonly class for one table's row, read with `->into(Post::class)` | `app/`, named after the row: `app/Post.php` |
+| Runs (work of many steps that survives crashes) and actors (one per key, a message at a time) | classes with `handle()` in `app/Actions/`; runs need `php cua runs:install` and `php cua migrate` once |
+| Settings | `config/`, the only place `env()` is called; read them with `config('file.key')` |
+| Tables | `php cua make:migration create_posts_table` writes one in `database/migrations/` |
+| Tests | `tests/` |
+
+Make a folder when it has a file, not before. Nothing is found by convention: a plugin is named in `app.php`, a command in `routes/console.php`.
+
+## Rules
+
+- An action's parameters say where each value comes from: a name in the route's pattern is that part of the path, `#[FromQuery] int $page = 1` is a field of the query string, and a class (an input class in `app/Http/`) or `#[Fields([...])] Data` is the body, which is always one object, never a parameter per field. Each is checked against its types and attributes (`#[Email]`, `#[Length(min: 2)]`, `#[Range(min: 1)]`) before the action runs; a request that does not fit gets `422`. Do not validate again inside the action, and do not read fields from `$request` that the signature could declare.
+- Services go in the action's constructor, never in `handle()`'s parameters.
+- Never keep request data in a property or a static: the worker keeps the object for the next request.
+- Return `view('notes', [...])` for a page, an array to answer with JSON, or a `Crab\Http\Response` to set the status or a header. After a form that changes something, redirect with `Response::redirect('/', 303)`.
+- Bind SQL values with `?` or `:name`; never put a value into the SQL text.
+- In a template, `{{ }}` escapes; `{!! !!}` is only for HTML you trust, such as a slot. Pass data to a `<script>` with `@json($value)`.
+- A component that should take any HTML attribute (`class`, `aria-*`, `data-*`) declares `array $attributes = []` and writes them with `@attributes($attributes, [...defaults])`.
+- An action takes the session as `Session $session` (`Crab\Contracts\Session\Session`). A message for the page after a redirect is `$session->flash('status', '…')`. The session keeps JSON values only, and never who is logged in.
+- `APP_KEY` in `.env` is the application's secret, read as `config('app.key')`; `php cua key:generate` writes one. Never commit `.env`, and never replace a key in use without `--force`: it ends every cookie session.
+- A queued job may run more than once; write it so that running twice does no harm.
+- An action that returns a generator streams server-sent events, and its status is sent before the first `yield`: check what can fail before then, and pass `$request->cancellation()` to what it waits on.
+- A run is run again from the top each time it resumes: anything slow, random or outside the process (a query, an API call, the time) goes in `$run->step()`, each step with a unique name.
+- An actor keeps its memory in `handle()`'s variables, never in properties: the object is shared between keys. Its memory ends when it goes idle; keep what must last in the database.
+
+## Check your work
+
+- `composer test` runs the tests. A test sends requests to the application in-process with `Crab\Testing\Api`, without a server; see `tests/ExampleTest.php`.
+- After changing `config/` or `.env`, run `php cua describe app`: it lists every setting that does not fit, with what it takes. `start` refuses to run until they do.
+- `php cua migrate:fresh` drops every table and runs the migrations again, for a clean development database.
+- `php cua dev` serves on http://127.0.0.1:8080 and restarts when a file is saved. `php cua start` is for production and does not watch.
